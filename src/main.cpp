@@ -408,6 +408,90 @@ int main(){
         else if (cmd=="release_train") handle_release_train(kv,kvc);
         else if (cmd=="query_train") handle_query_train(kv,kvc);
         else if (cmd=="delete_train") handle_delete_train(kv,kvc);
+        else if (cmd=="query_ticket") {
+            // Implement minimal query: consider only released trains; compute matches for date at station s
+            // Parse args
+            string s,t,d,ord; getv(kv,kvc,"s",s); getv(kv,kvc,"t",t); getv(kv,kvc,"d",d); bool hasp=getv(kv,kvc,"p",ord);
+            Date qd = parse_date(d);
+            struct Item { string tid; int from_idx; int to_idx; int dep_m,dep_d,dep_h,dep_min; int arr_m,arr_d,arr_h,arr_min; int price; int seat; long long use_time; };
+            static Item items[9000]; int cnt=0;
+            for (int i=0;i<MAX_TRAINS;i++) if (trains[i].in_use) {
+                Train &tr = trains[i]; if (!tr.released) continue; // only released
+                int si=-1, ti=-1; for(int j=0;j<tr.stationNum;j++){ if (tr.stations[j]==s) { si=j; break;} }
+                if (si==-1) continue; for(int j=si+1;j<tr.stationNum;j++){ if (tr.stations[j]==t){ ti=j; break;} }
+                if (ti==-1) continue;
+                // compute minutes offset from start departure to leaving at station si
+                long long offset=0; // minutes from start departure to leave station si
+                if (si==0) offset=0; else {
+                    for (int k=0;k<si;k++) { offset += tr.travel[k]; if (k+1<tr.stationNum-0) { if (k+1<tr.stationNum-1) offset += tr.stopover[k]; } }
+                }
+                // iterate base departure date from sale_l..sale_r to see if leaving at s occurs on qd
+                // daily schedule, so leaving date at s = base_date plus day carry from 'offset'
+                // Compute leaving date components for base = sale_l..sale_r and see if equals qd
+                // It suffices to compute day shift from offset: offset_days = floor((start.h*60+start.m + offset)/1440)
+                int base_mm, base_dd, base_hh, base_mi;
+                int tmp_m,tmp_d,tmp_h,tmp_min;
+                // We'll try two candidates: earliest l and also adjust days difference between qd and sale_l
+                // Simpler: scan all base dates in range (range up to ~92 days). Acceptable.
+                Date cur = tr.sale_l;
+                // Helper to advance date by +1 day
+                auto adv=[&](Date &x){ static const int MD[13]={0,31,28,31,30,31,30,31,31,30,31,30,31}; if (x.d<MD[x.m]) x.d++; else { x.m++; x.d=1; } };
+                // compare date
+                auto same_date=[&](int mm,int dd){ return (mm==qd.m && dd==qd.d); };
+                // compute leaving at s time/date from base cur
+                bool matched=false; Date matched_base{0,0};
+                Date end=tr.sale_r; // inclusive
+                Date iter=cur;
+                while (true) {
+                    add_minutes(iter, tr.start.h, tr.start.m, offset, tmp_m,tmp_d,tmp_h,tmp_min);
+                    if (same_date(tmp_m,tmp_d)) { matched=true; matched_base=iter; break; }
+                    if (iter.m==end.m && iter.d==end.d) break;
+                    adv(iter);
+                }
+                if (!matched) continue;
+                // build item
+                // departure from s is tmp_m,tmp_d,tmp_h,tmp_min
+                // arrival at t: compute arrival time at t (arrival, before potential stopover at t)
+                long long offset_arr = 0; for (int k=0;k<ti;k++){ offset_arr += tr.travel[k]; if (k+1<ti) offset_arr += tr.stopover[k]; }
+                int arrM,arrD,arrH,arrMin; add_minutes(matched_base, tr.start.h, tr.start.m, offset_arr, arrM,arrD,arrH,arrMin);
+                int price=0; for (int k=si;k<ti;k++) price += tr.price_between[k];
+                long long use_time = (long long)(arrM*0) + (arrD*0); // we will compute using total minutes difference
+                // Compute minutes diff between leave at s and arrive at t
+                // First compute absolute minute count relative to baseline month/day; instead reuse add_minutes logic
+                // We approximate by converting to total minutes since base (June 1) but we can compute delta by simulating
+                // Simpler: calculate minutes offset: dep offset = offset; arr offset = offset_arr; delta = arr - dep
+                use_time = offset_arr - offset;
+                Item &it = items[cnt++];
+                it.tid=tr.trainID; it.from_idx=si; it.to_idx=ti; it.dep_m=tmp_m; it.dep_d=tmp_d; it.dep_h=tmp_h; it.dep_min=tmp_min;
+                it.arr_m=arrM; it.arr_d=arrD; it.arr_h=arrH; it.arr_min=arrMin; it.price=price; it.seat=tr.seatNum; it.use_time=use_time;
+            }
+            // sort
+            bool sort_by_time = (!hasp || ord=="time");
+            // simple insertion sort
+            for (int i=1;i<cnt;i++){
+                Item key=items[i]; int j=i-1;
+                while (j>=0){
+                    bool less=false;
+                    if (sort_by_time){
+                        if (key.use_time < items[j].use_time) less=true;
+                        else if (key.use_time==items[j].use_time) less = (key.tid < items[j].tid);
+                    } else {
+                        if (key.price < items[j].price) less=true;
+                        else if (key.price==items[j].price) less = (key.tid < items[j].tid);
+                    }
+                    if (!less) break; items[j+1]=items[j]; j--; }
+                items[j+1]=key;
+            }
+            printf("%d\n", cnt);
+            for (int i=0;i<cnt;i++){
+                Item &it=items[i];
+                printf("%s %s ", it.tid.c_str(), s.c_str());
+                print_time_md_hm(it.dep_m,it.dep_d,it.dep_h,it.dep_min);
+                printf(" -> %s ", t.c_str());
+                print_time_md_hm(it.arr_m,it.arr_d,it.arr_h,it.arr_min);
+                printf(" %d %d\n", it.price, it.seat);
+            }
+        }
         else if (cmd=="clean") { clear_users(); clear_trains(); puts("0"); }
         else if (cmd=="exit") { puts("bye"); break; }
         else {
