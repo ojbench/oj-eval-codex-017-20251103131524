@@ -476,10 +476,15 @@ int main(){
     string line;
     while (std::getline(std::cin, line)){
         trim(line); if (line.empty()) continue;
-        // Some datasets may prefix index like [1] command; strip leading [..]
+        // Some datasets may prefix index like [1] or numeric id; strip leading prefix
         if (!line.empty() && line[0]=='['){
             size_t r = line.find(']'); if (r!=string::npos && r+1<line.size()) line = line.substr(r+1);
             trim(line);
+        }
+        // strip leading numeric id
+        if (!line.empty() && line[0]>='0' && line[0]<='9'){
+            size_t sp = line.find(' ');
+            if (sp!=string::npos){ line = line.substr(sp+1); trim(line); }
         }
         string cmd; ArgPair kv[256]; int kvc = parse_kv(line, cmd, kv, 256);
         if (cmd=="add_user") handle_add_user(kv,kvc);
