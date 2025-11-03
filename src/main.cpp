@@ -415,6 +415,10 @@ static void handle_query_train(ArgPair*a,int n){
     int idx=find_train(id); if (idx==-1){ puts("-1"); return; }
     Train &tr=trains[idx];
     Date dep = parse_date(d);
+    // check sale date range: d must be in [sale_l, sale_r]
+    auto date_le=[&](const Date &A,const Date &B){ if(A.m!=B.m) return A.m<B.m; return A.d<=B.d; };
+    auto date_lt=[&](const Date &A,const Date &B){ if(A.m!=B.m) return A.m<B.m; return A.d<B.d; };
+    if (date_lt(dep, tr.sale_l) || date_lt(tr.sale_r, dep)) { puts("-1"); return; }
     // Output header
     printf("%s %s\n", tr.trainID.c_str(), tr.type.c_str());
     // cumulative times
