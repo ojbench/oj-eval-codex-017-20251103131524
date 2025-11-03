@@ -197,6 +197,84 @@ static int alloc_train_slot(const string &tid){
 
 static void clear_trains(){ for(int i=0;i<MAX_TRAINS;i++){ trains[i]=Train(); } init_train_hash(); }
 
+// PERSISTENCE (binary, simple)
+static const char *USER_FILE = "users.dat";
+static const char *TRAIN_FILE = "trains.dat";
+
+static void save_users(){
+    FILE *fp = fopen(USER_FILE, "wb"); if(!fp) return;
+    int cnt=0; for(int i=0;i<MAX_USERS;i++) if(users[i].in_use) cnt++;
+    fwrite(&cnt, sizeof(int), 1, fp);
+    for(int i=0;i<MAX_USERS;i++) if(users[i].in_use){
+        // serialize strings: len + bytes
+        auto wrs=[&](const string &s){ int L=(int)s.size(); fwrite(&L,sizeof(int),1,fp); if(L) fwrite(s.data(),1,L,fp); };
+        wrs(users[i].username); wrs(users[i].password); wrs(users[i].name); wrs(users[i].mail);
+        fwrite(&users[i].privilege,sizeof(int),1,fp);
+    }
+    fclose(fp);
+}
+
+static void load_users(){
+    clear_users();
+    FILE *fp = fopen(USER_FILE, "rb"); if(!fp) return;
+    int cnt=0; if (fread(&cnt,sizeof(int),1,fp)!=1){ fclose(fp); return; }
+    for(int k=0;k<cnt;k++){
+        auto rds=[&](string &s){ int L=0; if(fread(&L,sizeof(int),1,fp)!=1){L=0;} s.clear(); if(L>0){ s.resize(L); fread(&s[0],1,L,fp);} };
+        string u,p,n,m; int g=0; rds(u); rds(p); rds(n); rds(m); fread(&g,sizeof(int),1,fp);
+        int slot = alloc_user_slot(u); if (slot<0) continue;
+        users[slot].in_use=true; users[slot].username=u; users[slot].password=p; users[slot].name=n; users[slot].mail=m; users[slot].privilege=g; users[slot].logged=false;
+    }
+    fclose(fp);
+}
+
+static void save_trains(){
+    FILE *fp=fopen(TRAIN_FILE, "wb"); if(!fp) return; int cnt=0; for(int i=0;i<MAX_TRAINS;i++) if(trains[i].in_use) cnt++;
+    fwrite(&cnt,sizeof(int),1,fp);
+    for(int i=0;i<MAX_TRAINS;i++) if(trains[i].in_use){
+        auto wrs=[&](const string &s){ int L=(int)s.size(); fwrite(&L,sizeof(int),1,fp); if(L) fwrite(s.data(),1,L,fp); };
+        int one=1, zero=0;
+        fwrite(&one,sizeof(int),1,fp); // in_use
+        int rel = trains[i].released?1:0; fwrite(&rel,sizeof(int),1,fp);
+        wrs(trains[i].trainID); fwrite(&trains[i].stationNum,sizeof(int),1,fp); fwrite(&trains[i].seatNum,sizeof(int),1,fp); wrs(trains[i].type);
+        for(int j=0;j<trains[i].stationNum;j++) wrs(trains[i].stations[j]);
+        for(int j=0;j<trains[i].stationNum-1;j++) fwrite(&trains[i].price_between[j],sizeof(int),1,fp);
+        for(int j=0;j<trains[i].stationNum-1;j++) fwrite(&trains[i].travel[j],sizeof(int),1,fp);
+        for(int j=0;j< (trains[i].stationNum>=2? trains[i].stationNum-2:0); j++) fwrite(&trains[i].stopover[j],sizeof(int),1,fp);
+        fwrite(&trains[i].start.h,sizeof(int),1,fp); fwrite(&trains[i].start.m,sizeof(int),1,fp);
+        fwrite(&trains[i].sale_l.m,sizeof(int),1,fp); fwrite(&trains[i].sale_l.d,sizeof(int),1,fp);
+        fwrite(&trains[i].sale_r.m,sizeof(int),1,fp); fwrite(&trains[i].sale_r.d,sizeof(int),1,fp);
+    }
+    fclose(fp);
+}
+
+static void load_trains(){
+    clear_trains();
+    FILE *fp=fopen(TRAIN_FILE, "rb"); if(!fp) return; int cnt=0; if(fread(&cnt,sizeof(int),1,fp)!=1){ fclose(fp); return; }
+    for(int k=0;k<cnt;k++){
+        auto rds=[&](string &s){ int L=0; if(fread(&L,sizeof(int),1,fp)!=1){L=0;} s.clear(); if(L>0){ s.resize(L); fread(&s[0],1,L,fp);} };
+        int inuse=0, rel=0; fread(&inuse,sizeof(int),1,fp); fread(&rel,sizeof(int),1,fp);
+        string tid, type; int nst=0, seat=0; rds(tid); fread(&nst,sizeof(int),1,fp); fread(&seat,sizeof(int),1,fp); rds(type);
+        int slot = alloc_train_slot(tid); if (slot<0){ // skip record
+            // skip remaining fields
+            string tmp; for(int j=0;j<nst;j++) rds(tmp);
+            int x; for(int j=0;j<nst-1;j++) fread(&x,sizeof(int),1,fp);
+            for(int j=0;j<nst-1;j++) fread(&x,sizeof(int),1,fp);
+            for(int j=0;j< (nst>=2? nst-2:0); j++) fread(&x,sizeof(int),1,fp);
+            int y; for(int c=0;c<6;c++) fread(&y,sizeof(int),1,fp);
+            continue;
+        }
+        Train &tr = trains[slot]; tr=Train(); tr.in_use=true; tr.released = (rel!=0); tr.trainID=tid; tr.stationNum=nst; tr.seatNum=seat; tr.type=type;
+        for(int j=0;j<nst;j++) rds(tr.stations[j]);
+        for(int j=0;j<nst-1;j++) fread(&tr.price_between[j],sizeof(int),1,fp);
+        for(int j=0;j<nst-1;j++) fread(&tr.travel[j],sizeof(int),1,fp);
+        for(int j=0;j< (nst>=2? nst-2:0); j++) fread(&tr.stopover[j],sizeof(int),1,fp);
+        fread(&tr.start.h,sizeof(int),1,fp); fread(&tr.start.m,sizeof(int),1,fp);
+        fread(&tr.sale_l.m,sizeof(int),1,fp); fread(&tr.sale_l.d,sizeof(int),1,fp);
+        fread(&tr.sale_r.m,sizeof(int),1,fp); fread(&tr.sale_r.d,sizeof(int),1,fp);
+    }
+    fclose(fp);
+}
+
 // Parse arguments of form -k value
 struct ArgPair { string key; string val; };
 static int parse_kv(const string &line, string &cmd, ArgPair *out, int maxn){
@@ -248,6 +326,7 @@ static void handle_add_user(ArgPair *a, int n){
     }
     users[slot].in_use=true;
     users[slot].username=u; users[slot].password=p; users[slot].name=name; users[slot].mail=mail; users[slot].privilege=priv; users[slot].logged=false;
+    save_users();
     puts("0");
 }
 
@@ -286,6 +365,7 @@ static void handle_modify_profile(ArgPair*a,int n){
     string p,name,mail,g; bool hp=getv(a,n,"p",p); bool hn=getv(a,n,"n",name); bool hm=getv(a,n,"m",mail); bool hg=getv(a,n,"g",g);
     if (hg){ int ng=parse_int(g); if (!(ng < users[cidx].privilege)) { puts("-1"); return; } users[uidx].privilege=ng; }
     if (hp) users[uidx].password=p; if (hn) users[uidx].name=name; if (hm) users[uidx].mail=mail;
+    save_users();
     print_user_info(users[uidx]);
 }
 
@@ -319,6 +399,7 @@ static void handle_add_train(ArgPair*a,int n){
         if (oc!=tr.stationNum-2){ puts("-1"); tr=Train(); return; }
         for (int i=0;i<oc;i++) tr.stopover[i]=parse_int(ov[i]);
     }
+    save_trains();
     puts("0");
 }
 
@@ -326,7 +407,7 @@ static void handle_release_train(ArgPair*a,int n){
     string id; if(!getv(a,n,"i",id)){ puts("-1"); return; }
     int idx=find_train(id); if (idx==-1){ puts("-1"); return; }
     if (trains[idx].released){ puts("-1"); return; }
-    trains[idx].released=true; puts("0");
+    trains[idx].released=true; save_trains(); puts("0");
 }
 
 static void handle_query_train(ArgPair*a,int n){
@@ -383,6 +464,7 @@ static void handle_delete_train(ArgPair*a,int n){
     int idx=find_train(id); if (idx==-1) { puts("-1"); return; }
     if (trains[idx].released){ puts("-1"); return; }
     trains[idx]=Train(); // mark free (hash left as-is)
+    save_trains();
     puts("0");
 }
 
@@ -390,6 +472,7 @@ int main(){
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
     init_user_hash(); init_train_hash();
+    load_users(); load_trains();
     string line;
     while (std::getline(std::cin, line)){
         trim(line); if (line.empty()) continue;
@@ -492,7 +575,12 @@ int main(){
                 printf(" %d %d\n", it.price, it.seat);
             }
         }
-        else if (cmd=="clean") { clear_users(); clear_trains(); puts("0"); }
+        else if (cmd=="clean") {
+            clear_users(); clear_trains();
+            // remove files
+            remove(USER_FILE); remove(TRAIN_FILE);
+            puts("0");
+        }
         else if (cmd=="exit") { puts("bye"); break; }
         else {
             // unsupported commands return -1
